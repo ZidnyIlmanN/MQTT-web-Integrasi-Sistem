@@ -1,0 +1,47 @@
+=================================================================
+MQTT IoT Dashboard - Certificate Information
+=================================================================
+
+Generated: Sat May 24 10:54:12 WIB 2025
+Validity: 365 days
+Common Name: mqtt.localhost
+
+Files Created:
+- ca.key          : CA private key
+- ca.crt          : CA certificate  
+- server.key      : Server private key
+- server.crt      : Server certificate
+- server.csr      : Server certificate signing request
+- client.key      : Client private key
+- client.crt      : Client certificate
+- server-combined.crt : Combined server + CA certificate
+
+Certificate Details:
+- Country: US
+- State: California
+- City: San Francisco
+- Organization: MQTT IoT Dashboard
+- Organizational Unit: IT Department
+- Email: admin@mqtt.localhost
+
+Subject Alternative Names:
+- DNS: mqtt.localhost
+- DNS: localhost
+- DNS: mosquitto
+- DNS: mqtt-broker
+- IP: 127.0.0.1
+- IP: 192.168.1.100
+- IP: 172.20.0.2
+
+Usage:
+1. Place certificates in mosquitto config directory
+2. Update mosquitto.conf to use these certificates
+3. Configure clients to use ca.crt for verification
+4. For mutual TLS, use client.crt and client.key
+
+Security Notes:
+- Keep private keys (.key files) secure
+- Distribute only the CA certificate to clients
+- Regenerate certificates before expiry
+- Use proper file permissions (600 for .key, 644 for .crt)
+=================================================================
