@@ -1,0 +1,179 @@
+version: '3.8'
+
+services:
+  # Mosquitto MQTT Broker
+  mosquitto:
+    image: eclipse-mosquitto:2.0
+    container_name: mqtt-broker
+    restart: unless-stopped
+    ports:
+      - "1883:1883"     # MQTT
+      - "8883:8883"     # MQTTS (MQTT over TLS)
+      - "8080:8080"     # WebSocket
+      - "8081:8081"     # Secure WebSocket
+    volumes:
+      - ./mosquitto/config:/mosquitto/config
+      - ./mosquitto/data:/mosquitto/data
+      - ./mosquitto/logs:/mosquitto/log
+      # Temporarily comment out certs mount to avoid read-only file system error
+      - ./certs:/mosquitto/config/certs:ro
+    environment:
+      - MOSQUITTO_USERNAME=admin
+      - MOSQUITTO_PASSWORD=admin123
+    networks:
+      - mqtt-network
+    healthcheck:
+      test: ["CMD-SHELL", "mosquitto_pub -h localhost -t test -m test || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # MQTT Dashboard Web Application  
+  mqtt-dashboard:
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile
+    container_name: mqtt-dashboard
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - MQTT_BROKER_URL=ws://mosquitto:8080
+      - MQTT_BROKER_URL_SECURE=wss://mosquitto:8081
+    depends_on:
+      - mosquitto
+    networks:
+      - mqtt-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Redis for session storage (optional)
+  redis:
+    image: redis:7-alpine
+    container_name: mqtt-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - mqtt-network
+    command: redis-server --appendonly yes --requirepass redis123
+    healthcheck:
+      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # InfluxDB for time-series data storage (optional)
+  influxdb:
+    image: influxdb:2.0
+    container_name: mqtt-influxdb
+    restart: unless-stopped
+    ports:
+      - "8086:8086"
+    environment:
+      - INFLUXDB_DB=mqtt_data
+      - INFLUXDB_ADMIN_USER=admin
+      - INFLUXDB_ADMIN_PASSWORD=admin123
+      - INFLUXDB_USER=mqtt
+      - INFLUXDB_USER_PASSWORD=mqtt123
+    volumes:
+      - influxdb-data:/var/lib/influxdb2
+      - influxdb-config:/etc/influxdb2
+    networks:
+      - mqtt-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8086/ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Grafana for data visualization (optional)
+  grafana:
+    image: grafana/grafana:latest
+    container_name: mqtt-grafana
+    restart: unless-stopped
+    ports:
+      - "3001:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin123
+      - GF_INSTALL_PLUGINS=grafana-clock-panel,grafana-simple-json-datasource
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning
+    depends_on:
+      - influxdb
+    networks:
+      - mqtt-network
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:3000/api/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Nginx reverse proxy with SSL termination
+  nginx:
+    image: nginx:alpine
+    container_name: mqtt-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./certs:/etc/nginx/certs:ro
+    depends_on:
+      - mqtt-dashboard
+      - mosquitto
+      - grafana
+    networks:
+      - mqtt-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # MQTT Client Simulator for testing
+  mqtt-simulator:
+    build:
+      context: ./simulator
+      dockerfile: Dockerfile
+    container_name: mqtt-simulator
+    restart: unless-stopped
+    environment:
+      - MQTT_BROKER=mosquitto
+      - MQTT_PORT=1883
+      - MQTT_USERNAME=testuser
+      - MQTT_PASSWORD=test123
+      - SIMULATION_INTERVAL=5000
+    depends_on:
+      - mosquitto
+    networks:
+      - mqtt-network
+    profiles:
+      - testing
+
+volumes:
+  redis-data:
+    driver: local
+  influxdb-data:
+    driver: local
+  influxdb-config:
+    driver: local  
+  grafana-data:
+    driver: local
+
+networks:
+  mqtt-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16

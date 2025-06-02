@@ -1,0 +1,145 @@
+# =================================================================
+# Mosquitto Access Control List (ACL) Configuration
+# MQTT IoT Dashboard - Authorization Rules
+# =================================================================
+
+# Default rules - applied to all users unless overridden
+# =================================================================
+# Deny all by default (whitelist approach)
+# Uncomment the line below to deny all access by default
+# pattern deny #
+
+# System Topics - Allow all authenticated users to read broker status
+pattern read $SYS/#
+
+# Admin User - Full access to everything
+# =================================================================
+user admin
+topic readwrite #
+topic readwrite $SYS/#
+
+# IoT Device Users - Limited access to device-specific topics
+# =================================================================
+user device001
+topic readwrite devices/device001/#
+topic readwrite sensors/device001/#
+topic readwrite commands/device001/#
+topic readwrite status/device001
+topic read broadcast/#
+
+user device002  
+topic readwrite devices/device002/#
+topic readwrite sensors/device002/#
+topic readwrite commands/device002/#
+topic readwrite status/device002
+topic read broadcast/#
+
+user device003
+topic readwrite devices/device003/#
+topic readwrite sensors/device003/#
+topic readwrite commands/device003/#
+topic readwrite status/device003
+topic read broadcast/#
+
+# Dashboard User - Read access to all devices, write to control topics
+# =================================================================
+user dashboard
+topic read devices/+/#
+topic read sensors/+/#
+topic read status/+
+topic readwrite commands/+/#
+topic readwrite control/#
+topic readwrite dashboard/#
+topic read $SYS/#
+
+# Monitor User - Read-only access for monitoring purposes
+# =================================================================
+user monitor
+topic read devices/+/#
+topic read sensors/+/#
+topic read status/+
+topic read logs/#
+topic read $SYS/#
+
+# Guest User - Very limited read access
+# =================================================================
+user guest
+topic read public/#
+topic read demo/#
+topic read $SYS/broker/version
+topic read $SYS/broker/uptime
+
+# Service Users - For backend services and applications
+# =================================================================
+user api_service
+topic readwrite api/#
+topic readwrite services/#
+topic read devices/+/#
+topic read sensors/+/#
+topic readwrite logs/#
+
+user data_collector
+topic read devices/+/#
+topic read sensors/+/#
+topic readwrite data/#
+topic readwrite analytics/#
+
+# Pattern-based rules using client ID
+# =================================================================
+# Allow clients to publish to their own status topic
+pattern readwrite status/%c
+pattern readwrite clients/%c/#
+
+# Allow clients to subscribe to their own command topics  
+pattern readwrite commands/%c/#
+
+# Emergency/Broadcast Topics - All authenticated users can read
+# =================================================================
+pattern read emergency/#
+pattern read broadcast/#
+pattern read alerts/#
+
+# Test Environment - Allow broader access for testing
+# =================================================================
+user testuser
+topic readwrite test/#
+topic readwrite demo/#
+topic readwrite sandbox/#
+pattern readwrite test/%c/#
+
+# Development Environment Rules
+# =================================================================
+user developer
+topic readwrite dev/#
+topic readwrite test/#
+topic readwrite debug/#
+topic read devices/+/#
+topic read sensors/+/#
+topic read $SYS/#
+
+# Analytics Service - Read access to all data topics
+# =================================================================
+user analytics
+topic read devices/+/#
+topic read sensors/+/#
+topic read data/#
+topic readwrite analytics/#
+topic readwrite reports/#
+
+# Security Rules - Preventing common attack vectors
+# =================================================================
+# Prevent access to sensitive system information
+pattern deny $SYS/broker/clients/+/disconnect
+pattern deny $SYS/broker/clients/+/connected
+
+# Topic naming conventions and restrictions
+# =================================================================
+# Topics should follow the pattern: category/device_id/data_type
+# Examples:
+#   - sensors/device001/temperature
+#   - devices/device001/status  
+#   - commands/device001/restart
+#   - status/device001
+
+# Rate limiting can be implemented at broker level
+# These rules define access permissions only

@@ -1,0 +1,114 @@
+# =================================================================
+# Mosquitto MQTT Broker Configuration
+# MQTT IoT Dashboard - Secure Configuration
+# =================================================================
+
+# Basic Configuration
+# =================================================================
+pid_file /var/run/mosquitto.pid
+persistence true
+persistence_location /mosquitto/data/
+log_dest file /mosquitto/log/mosquitto.log
+log_dest stdout
+log_type error
+log_type warning
+log_type notice
+log_type information
+log_timestamp true
+connection_messages true
+
+# Network Configuration
+# =================================================================
+# Standard MQTT (Unencrypted) - Only for testing
+listener 1883
+protocol mqtt
+allow_anonymous false
+
+# Secure MQTT over TLS/SSL
+listener 8883
+protocol mqtt
+cafile /mosquitto/config/certs/ca.crt
+certfile /mosquitto/config/certs/server.crt
+keyfile /mosquitto/config/certs/server.key
+tls_version tlsv1.2
+require_certificate false
+use_identity_as_username false
+
+# WebSocket Configuration (for web clients)
+listener 8080
+protocol websockets
+allow_anonymous false
+
+# Secure WebSocket over TLS
+listener 8081
+protocol websockets
+cafile /mosquitto/config/certs/ca.crt
+certfile /mosquitto/config/certs/server.crt
+keyfile /mosquitto/config/certs/server.key
+tls_version tlsv1.2
+
+# Authentication & Authorization
+# =================================================================
+# Enable password file authentication
+password_file /mosquitto/config/passwd
+allow_anonymous false
+
+# ACL (Access Control List) for topic-based authorization
+acl_file /mosquitto/config/acl
+
+# Security Settings
+# =================================================================
+max_connections 1000
+max_inflight_messages 20
+max_queued_messages 100
+message_size_limit 1048576
+
+# Client session settings
+persistent_client_expiration 2h
+max_keepalive 300
+keepalive_interval 60
+
+# Will delay for Last Will and Testament
+will_delay_interval 5
+
+# Quality of Service Settings
+# =================================================================
+max_inflight_messages 20
+max_queued_messages 100
+queue_qos0_messages false
+set_tcp_nodelay true
+
+# Bridge Configuration (for MQTT broker clustering - optional)
+# =================================================================
+# connection bridge-to-aws
+# address your-iot-endpoint.amazonaws.com:8883
+# topic devices/# both 0
+# topic logs/# both 0
+# bridge_cafile /mosquitto/config/certs/aws-ca.crt
+# bridge_certfile /mosquitto/config/certs/aws-client.crt
+# bridge_keyfile /mosquitto/config/certs/aws-client.key
+
+# Logging & Monitoring
+# =================================================================
+log_dest file /mosquitto/log/mosquitto.log
+log_dest topic $SYS/broker/log/M/publish
+log_dest topic $SYS/broker/log/M/subscribe
+log_type error
+log_type warning  
+log_type notice
+log_type information
+log_type subscribe
+log_type unsubscribe
+log_type websockets
+log_type none
+log_timestamp true
+log_timestamp_format %Y-%m-%d %H:%M:%S
+
+# System Topics ($SYS) - Enable broker statistics
+# =================================================================
+sys_interval 10
+
+# Additional Security Headers for WebSocket
+# =================================================================
+# These are handled by reverse proxy (nginx/apache) typically
+# But can be configured here for direct access
