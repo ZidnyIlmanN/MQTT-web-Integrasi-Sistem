@@ -1,0 +1,13 @@
+{
+  "name": "mqtt-dashboard",
+  "version": "1.0.0",
+  "description": "Simple static MQTT dashboard",
+  "main": "index.html",
+  "scripts": {
+    "start": "serve -s . -l 3000"
+  },
+  "dependencies": {},
+  "devDependencies": {},
+  "author": "",
+  "license": "ISC"
+}

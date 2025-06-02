@@ -1,0 +1,592 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MQTT IoT Control Dashboard</title>
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/mqtt/4.3.7/mqtt.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet" />
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+        body { font-family: 'Inter', sans-serif; }
+        .gradient-bg { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }
+        .glass-effect { backdrop-filter: blur(10px); background: rgba(255, 255, 255, 0.1); }
+        .animate-pulse-slow { animation: pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+        .animate-slide-in { animation: slideIn 0.5s ease-out; }
+        @keyframes slideIn {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .status-connected { box-shadow: 0 0 20px rgba(34, 197, 94, 0.5); }
+        .status-disconnected { box-shadow: 0 0 20px rgba(239, 68, 68, 0.5); }
+        .message-item { transition: all 0.3s ease; }
+        .message-item:hover { transform: translateX(5px); background: rgba(255, 255, 255, 0.05); }
+    </style>
+</head>
+<body class="bg-slate-900 text-white min-h-screen">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+
+        const MQTTDashboard = () => {
+            // State management
+            const [connectionConfig, setConnectionConfig] = useState({
+                brokerUrl: 'wss://test.mosquitto.org:8081',
+                port: '8081',
+                clientId: `mqtt_client_${Math.random().toString(16).substr(2, 8)}`,
+                username: '',
+                password: '',
+                useTLS: true
+            });
+
+            const [client, setClient] = useState(null);
+            const [isConnected, setIsConnected] = useState(false);
+            const [connectionStatus, setConnectionStatus] = useState('Disconnected');
+            const [messages, setMessages] = useState([]);
+            const [subscriptions, setSubscriptions] = useState([]);
+            
+            const [subscribeConfig, setSubscribeConfig] = useState({
+                topic: 'test/topic',
+                qos: 0
+            });
+
+            const [publishConfig, setPublishConfig] = useState({
+                topic: 'test/topic',
+                message: '{"device": "sensor1", "temperature": 25.5, "humidity": 60}',
+                qos: 0,
+                retained: false
+            });
+
+            const [filter, setFilter] = useState('');
+            const [stats, setStats] = useState({
+                messagesReceived: 0,
+                messagesSent: 0,
+                connectionTime: null
+            });
+
+            const messagesEndRef = useRef(null);
+
+            // Auto scroll to bottom of messages
+            useEffect(() => {
+                messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+            }, [messages]);
+
+            // MQTT Connection
+            const connectToMQTT = async () => {
+                try {
+                    setConnectionStatus('Connecting...');
+                    
+                    const options = {
+                        clientId: connectionConfig.clientId,
+                        clean: true,
+                        connectTimeout: 4000,
+                        will: {
+                            topic: `status/${connectionConfig.clientId}`,
+                            payload: JSON.stringify({
+                                status: 'offline',
+                                timestamp: new Date().toISOString(),
+                                clientId: connectionConfig.clientId
+                            }),
+                            qos: 1,
+                            retain: true
+                        }
+                    };
+
+                    if (connectionConfig.username) {
+                        options.username = connectionConfig.username;
+                        options.password = connectionConfig.password;
+                    }
+
+                    const mqttClient = mqtt.connect(connectionConfig.brokerUrl, options);
+
+                    mqttClient.on('connect', () => {
+                        setIsConnected(true);
+                        setConnectionStatus('Connected');
+                        setClient(mqttClient);
+                        setStats(prev => ({ ...prev, connectionTime: new Date() }));
+                        
+                        // Publish online status
+                        mqttClient.publish(`status/${connectionConfig.clientId}`, JSON.stringify({
+                            status: 'online',
+                            timestamp: new Date().toISOString(),
+                            clientId: connectionConfig.clientId
+                        }), { qos: 1, retain: true });
+
+                        addMessage('system', 'System', 'Connected to MQTT broker successfully', 'success');
+                    });
+
+                    mqttClient.on('message', (topic, message) => {
+                        const messageStr = message.toString();
+                        setStats(prev => ({ ...prev, messagesReceived: prev.messagesReceived + 1 }));
+                        addMessage('received', topic, messageStr, 'info');
+                    });
+
+                    mqttClient.on('error', (err) => {
+                        setConnectionStatus(`Error: ${err.message}`);
+                        addMessage('system', 'Error', err.message, 'error');
+                    });
+
+                    mqttClient.on('disconnect', () => {
+                        setIsConnected(false);
+                        setConnectionStatus('Disconnected');
+                        addMessage('system', 'System', 'Disconnected from MQTT broker', 'warning');
+                    });
+
+                } catch (error) {
+                    setConnectionStatus(`Connection failed: ${error.message}`);
+                    addMessage('system', 'Error', `Connection failed: ${error.message}`, 'error');
+                }
+            };
+
+            const disconnectFromMQTT = () => {
+                if (client) {
+                    // Publish offline status before disconnecting
+                    client.publish(`status/${connectionConfig.clientId}`, JSON.stringify({
+                        status: 'offline',
+                        timestamp: new Date().toISOString(),
+                        clientId: connectionConfig.clientId
+                    }), { qos: 1, retain: true });
+                    
+                    client.end();
+                    setClient(null);
+                    setIsConnected(false);
+                    setConnectionStatus('Disconnected');
+                    setSubscriptions([]);
+                    setStats(prev => ({ ...prev, connectionTime: null }));
+                }
+            };
+
+            // Subscribe to topic
+            const subscribeToTopic = () => {
+                if (!client || !isConnected) return;
+
+                client.subscribe(subscribeConfig.topic, { qos: subscribeConfig.qos }, (err) => {
+                    if (!err) {
+                        const newSub = {
+                            topic: subscribeConfig.topic,
+                            qos: subscribeConfig.qos,
+                            timestamp: new Date()
+                        };
+                        setSubscriptions(prev => [...prev, newSub]);
+                        addMessage('system', 'Subscription', `Subscribed to ${subscribeConfig.topic} (QoS ${subscribeConfig.qos})`, 'success');
+                    } else {
+                        addMessage('system', 'Error', `Failed to subscribe: ${err.message}`, 'error');
+                    }
+                });
+            };
+
+            // Publish message
+            const publishMessage = () => {
+                if (!client || !isConnected) return;
+
+                const options = {
+                    qos: publishConfig.qos,
+                    retain: publishConfig.retained
+                };
+
+                client.publish(publishConfig.topic, publishConfig.message, options, (err) => {
+                    if (!err) {
+                        setStats(prev => ({ ...prev, messagesSent: prev.messagesSent + 1 }));
+                        addMessage('sent', publishConfig.topic, publishConfig.message, 'success');
+                    } else {
+                        addMessage('system', 'Error', `Failed to publish: ${err.message}`, 'error');
+                    }
+                });
+            };
+
+            // Unsubscribe from topic
+            const unsubscribeFromTopic = (topic) => {
+                if (!client || !isConnected) return;
+
+                client.unsubscribe(topic, (err) => {
+                    if (!err) {
+                        setSubscriptions(prev => prev.filter(sub => sub.topic !== topic));
+                        addMessage('system', 'Unsubscribe', `Unsubscribed from ${topic}`, 'warning');
+                    }
+                });
+            };
+
+            // Add message to log
+            const addMessage = (type, topic, payload, level) => {
+                const newMessage = {
+                    id: Date.now() + Math.random(),
+                    type,
+                    topic,
+                    payload,
+                    level,
+                    timestamp: new Date(),
+                    qos: type === 'received' ? 'N/A' : publishConfig.qos
+                };
+                setMessages(prev => [...prev.slice(-100), newMessage]); // Keep last 100 messages
+            };
+
+            // Filter messages
+            const filteredMessages = messages.filter(msg => 
+                !filter || 
+                msg.topic.toLowerCase().includes(filter.toLowerCase()) || 
+                msg.payload.toLowerCase().includes(filter.toLowerCase())
+            );
+
+            const getStatusColor = () => {
+                if (isConnected) return 'text-green-400';
+                if (connectionStatus.includes('Connecting')) return 'text-yellow-400';
+                return 'text-red-400';
+            };
+
+            const getMessageIcon = (type, level) => {
+                if (type === 'received') return 'fa-arrow-down text-blue-400';
+                if (type === 'sent') return 'fa-arrow-up text-green-400';
+                if (level === 'error') return 'fa-exclamation-triangle text-red-400';
+                if (level === 'warning') return 'fa-exclamation-circle text-yellow-400';
+                return 'fa-info-circle text-blue-400';
+            };
+
+            return (
+                <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900">
+                    {/* Header */}
+                    <div className="gradient-bg p-6 shadow-2xl">
+                        <div className="max-w-7xl mx-auto">
+                            <div className="flex items-center justify-between">
+                                <div className="flex items-center space-x-4">
+                                    <div className="bg-white bg-opacity-20 p-3 rounded-xl">
+                                        <i className="fas fa-network-wired text-2xl text-white"></i>
+                                    </div>
+                                    <div>
+                                        <h1 className="text-3xl font-bold text-white">MQTT IoT Dashboard</h1>
+                                        <p className="text-blue-100 opacity-90">Real-time IoT Device Monitoring & Control</p>
+                                    </div>
+                                </div>
+                                <div className={`flex items-center space-x-3 px-4 py-2 rounded-xl glass-effect ${isConnected ? 'status-connected' : 'status-disconnected'}`}>
+                                    <div className={`w-3 h-3 rounded-full ${isConnected ? 'bg-green-400 animate-pulse' : 'bg-red-400'}`}></div>
+                                    <span className={`font-semibold ${getStatusColor()}`}>{connectionStatus}</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="max-w-7xl mx-auto p-6 space-y-6">
+                        {/* Stats Cards */}
+                        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                            <div className="bg-slate-800 bg-opacity-60 backdrop-blur-sm rounded-xl p-6 border border-slate-700">
+                                <div className="flex items-center justify-between">
+                                    <div>
+                                        <p className="text-slate-400 text-sm">Connection Status</p>
+                                        <p className={`text-lg font-semibold ${getStatusColor()}`}>{connectionStatus}</p>
+                                    </div>
+                                    <i className={`fas fa-wifi text-2xl ${getStatusColor()}`}></i>
+                                </div>
+                            </div>
+                            <div className="bg-slate-800 bg-opacity-60 backdrop-blur-sm rounded-xl p-6 border border-slate-700">
+                                <div className="flex items-center justify-between">
+                                    <div>
+                                        <p className="text-slate-400 text-sm">Messages Received</p>
+                                        <p className="text-lg font-semibold text-blue-400">{stats.messagesReceived}</p>
+                                    </div>
+                                    <i className="fas fa-arrow-down text-2xl text-blue-400"></i>
+                                </div>
+                            </div>
+                            <div className="bg-slate-800 bg-opacity-60 backdrop-blur-sm rounded-xl p-6 border border-slate-700">
+                                <div className="flex items-center justify-between">
+                                    <div>
+                                        <p className="text-slate-400 text-sm">Messages Sent</p>
+                                        <p className="text-lg font-semibold text-green-400">{stats.messagesSent}</p>
+                                    </div>
+                                    <i className="fas fa-arrow-up text-2xl text-green-400"></i>
+                                </div>
+                            </div>
+                            <div className="bg-slate-800 bg-opacity-60 backdrop-blur-sm rounded-xl p-6 border border-slate-700">
+                                <div className="flex items-center justify-between">
+                                    <div>
+                                        <p className="text-slate-400 text-sm">Active Subscriptions</p>
+                                        <p className="text-lg font-semibold text-purple-400">{subscriptions.length}</p>
+                                    </div>
+                                    <i className="fas fa-list text-2xl text-purple-400"></i>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                            {/* Connection Panel */}
+                            <div className="bg-slate-800 bg-opacity-60 backdrop-blur-sm rounded-xl p-6 border border-slate-700">
+                                <h2 className="text-xl font-semibold mb-4 flex items-center">
+                                    <i className="fas fa-plug mr-2 text-blue-400"></i>
+                                    MQTT Connection
+                                </h2>
+                                <div className="space-y-4">
+                                    <div>
+                                        <label className="block text-sm font-medium text-slate-300 mb-1">Broker URL</label>
+                                        <input
+                                            type="text"
+                                            className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                            value={connectionConfig.brokerUrl}
+                                            onChange={(e) => setConnectionConfig(prev => ({...prev, brokerUrl: e.target.value}))}
+                                            disabled={isConnected}
+                                        />
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-3">
+                                        <div>
+                                            <label className="block text-sm font-medium text-slate-300 mb-1">Username</label>
+                                            <input
+                                                type="text"
+                                                className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                                value={connectionConfig.username}
+                                                onChange={(e) => setConnectionConfig(prev => ({...prev, username: e.target.value}))}
+                                                disabled={isConnected}
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-sm font-medium text-slate-300 mb-1">Password</label>
+                                            <input
+                                                type="password"
+                                                className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                                value={connectionConfig.password}
+                                                onChange={(e) => setConnectionConfig(prev => ({...prev, password: e.target.value}))}
+                                                disabled={isConnected}
+                                            />
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-medium text-slate-300 mb-1">Client ID</label>
+                                        <input
+                                            type="text"
+                                            className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                                            value={connectionConfig.clientId}
+                                            onChange={(e) => setConnectionConfig(prev => ({...prev, clientId: e.target.value}))}
+                                            disabled={isConnected}
+                                        />
+                                    </div>
+                                    <div className="flex items-center space-x-2">
+                                        <input
+                                            type="checkbox"
+                                            id="useTLS"
+                                            className="rounded border-slate-600 text-blue-500 focus:ring-blue-500"
+                                            checked={connectionConfig.useTLS}
+                                            onChange={(e) => setConnectionConfig(prev => ({...prev, useTLS: e.target.checked}))}
+                                            disabled={isConnected}
+                                        />
+                                        <label htmlFor="useTLS" className="text-sm text-slate-300">Use TLS/SSL</label>
+                                    </div>
+                                    <button
+                                        onClick={isConnected ? disconnectFromMQTT : connectToMQTT}
+                                        className={`w-full py-2 px-4 rounded-lg font-semibold transition-all duration-300 ${
+                                            isConnected 
+                                                ? 'bg-red-600 hover:bg-red-700 text-white' 
+                                                : 'bg-blue-600 hover:bg-blue-700 text-white'
+                                        }`}
+                                    >
+                                        {isConnected ? (
+                                            <>
+                                                <i className="fas fa-plug mr-2"></i>
+                                                Disconnect
+                                            </>
+                                        ) : (
+                                            <>
+                                                <i className="fas fa-link mr-2"></i>
+                                                Connect
+                                            </>
+                                        )}
+                                    </button>
+                                </div>
+                            </div>
+
+                            {/* Subscribe Panel */}
+                            <div className="bg-slate-800 bg-opacity-60 backdrop-blur-sm rounded-xl p-6 border border-slate-700">
+                                <h2 className="text-xl font-semibold mb-4 flex items-center">
+                                    <i className="fas fa-rss mr-2 text-green-400"></i>
+                                    Subscribe to Topics
+                                </h2>
+                                <div className="space-y-4">
+                                    <div>
+                                        <label className="block text-sm font-medium text-slate-300 mb-1">Topic</label>
+                                        <input
+                                            type="text"
+                                            className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white focus:ring-2 focus:ring-green-500 focus:border-transparent"
+                                            value={subscribeConfig.topic}
+                                            onChange={(e) => setSubscribeConfig(prev => ({...prev, topic: e.target.value}))}
+                                            placeholder="e.g., sensors/temperature"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-medium text-slate-300 mb-1">QoS Level</label>
+                                        <select
+                                            className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white focus:ring-2 focus:ring-green-500 focus:border-transparent"
+                                            value={subscribeConfig.qos}
+                                            onChange={(e) => setSubscribeConfig(prev => ({...prev, qos: parseInt(e.target.value)}))}
+                                        >
+                                            <option value={0}>QoS 0 - At most once</option>
+                                            <option value={1}>QoS 1 - At least once</option>
+                                            <option value={2}>QoS 2 - Exactly once</option>
+                                        </select>
+                                    </div>
+                                    <button
+                                        onClick={subscribeToTopic}
+                                        disabled={!isConnected}
+                                        className="w-full bg-green-600 hover:bg-green-700 disabled:bg-slate-600 text-white py-2 px-4 rounded-lg font-semibold transition-all duration-300"
+                                    >
+                                        <i className="fas fa-plus mr-2"></i>
+                                        Subscribe
+                                    </button>
+                                </div>
+
+                                {/* Active Subscriptions */}
+                                {subscriptions.length > 0 && (
+                                    <div className="mt-6">
+                                        <h3 className="text-sm font-medium text-slate-300 mb-2">Active Subscriptions</h3>
+                                        <div className="space-y-2">
+                                            {subscriptions.map((sub, index) => (
+                                                <div key={index} className="flex items-center justify-between bg-slate-700 bg-opacity-50 rounded-lg p-3">
+                                                    <div>
+                                                        <p className="text-white font-medium">{sub.topic}</p>
+                                                        <p className="text-slate-400 text-xs">QoS {sub.qos}</p>
+                                                    </div>
+                                                    <button
+                                                        onClick={() => unsubscribeFromTopic(sub.topic)}
+                                                        className="text-red-400 hover:text-red-300 transition-colors"
+                                                    >
+                                                        <i className="fas fa-times"></i>
+                                                    </button>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* Publish Panel */}
+                            <div className="bg-slate-800 bg-opacity-60 backdrop-blur-sm rounded-xl p-6 border border-slate-700">
+                                <h2 className="text-xl font-semibold mb-4 flex items-center">
+                                    <i className="fas fa-paper-plane mr-2 text-purple-400"></i>
+                                    Publish Messages
+                                </h2>
+                                <div className="space-y-4">
+                                    <div>
+                                        <label className="block text-sm font-medium text-slate-300 mb-1">Topic</label>
+                                        <input
+                                            type="text"
+                                            className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                                            value={publishConfig.topic}
+                                            onChange={(e) => setPublishConfig(prev => ({...prev, topic: e.target.value}))}
+                                            placeholder="e.g., devices/control"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm font-medium text-slate-300 mb-1">Message</label>
+                                        <textarea
+                                            className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white focus:ring-2 focus:ring-purple-500 focus:border-transparent h-24 resize-none"
+                                            value={publishConfig.message}
+                                            onChange={(e) => setPublishConfig(prev => ({...prev, message: e.target.value}))}
+                                            placeholder="Enter your message or JSON payload..."
+                                        />
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-3">
+                                        <div>
+                                            <label className="block text-sm font-medium text-slate-300 mb-1">QoS Level</label>
+                                            <select
+                                                className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+                                                value={publishConfig.qos}
+                                                onChange={(e) => setPublishConfig(prev => ({...prev, qos: parseInt(e.target.value)}))}
+                                            >
+                                                <option value={0}>QoS 0</option>
+                                                <option value={1}>QoS 1</option>
+                                                <option value={2}>QoS 2</option>
+                                            </select>
+                                        </div>
+                                        <div className="flex items-center space-x-2 pt-6">
+                                            <input
+                                                type="checkbox"
+                                                id="retained"
+                                                className="rounded border-slate-600 text-purple-500 focus:ring-purple-500"
+                                                checked={publishConfig.retained}
+                                                onChange={(e) => setPublishConfig(prev => ({...prev, retained: e.target.checked}))}
+                                            />
+                                            <label htmlFor="retained" className="text-sm text-slate-300">Retained</label>
+                                        </div>
+                                    </div>
+                                    <button
+                                        onClick={publishMessage}
+                                        disabled={!isConnected}
+                                        className="w-full bg-purple-600 hover:bg-purple-700 disabled:bg-slate-600 text-white py-2 px-4 rounded-lg font-semibold transition-all duration-300"
+                                    >
+                                        <i className="fas fa-send mr-2"></i>
+                                        Publish Message
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Messages Log */}
+                        <div className="bg-slate-800 bg-opacity-60 backdrop-blur-sm rounded-xl p-6 border border-slate-700">
+                            <div className="flex items-center justify-between mb-4">
+                                <h2 className="text-xl font-semibold flex items-center">
+                                    <i className="fas fa-list-alt mr-2 text-yellow-400"></i>
+                                    Message Log
+                                </h2>
+                                <div className="flex items-center space-x-4">
+                                    <input
+                                        type="text"
+                                        className="bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm focus:ring-2 focus:ring-yellow-500 focus:border-transparent"
+                                        placeholder="Filter messages..."
+                                        value={filter}
+                                        onChange={(e) => setFilter(e.target.value)}
+                                    />
+                                    <button
+                                        onClick={() => setMessages([])}
+                                        className="bg-slate-600 hover:bg-slate-700 text-white px-3 py-2 rounded-lg text-sm transition-colors"
+                                    >
+                                        <i className="fas fa-trash mr-1"></i>
+                                        Clear
+                                    </button>
+                                </div>
+                            </div>
+                            <div className="bg-slate-900 bg-opacity-50 rounded-lg p-4 h-80 overflow-y-auto">
+                                {filteredMessages.length === 0 ? (
+                                    <div className="flex items-center justify-center h-full text-slate-400">
+                                        <div className="text-center">
+                                            <i className="fas fa-inbox text-4xl mb-2"></i>
+                                            <p>No messages yet. Connect to MQTT broker to start receiving messages.</p>
+                                        </div>
+                                    </div>
+                                ) : (
+                                    <div className="space-y-2">
+                                        {filteredMessages.map((message) => (
+                                            <div key={message.id} className="message-item bg-slate-800 bg-opacity-30 rounded-lg p-3 border-l-4 border-slate-600 hover:border-blue-500">
+                                                <div className="flex items-start justify-between">
+                                                    <div className="flex items-start space-x-3 flex-1">
+                                                        <i className={`fas ${getMessageIcon(message.type, message.level)} mt-1`}></i>
+                                                        <div className="flex-1">
+                                                            <div className="flex items-center space-x-2 mb-1">
+                                                                <span className="font-semibold text-white">{message.topic}</span>
+                                                                <span className="text-xs bg-slate-700 text-slate-300 px-2 py-1 rounded">
+                                                                    QoS {message.qos}
+                                                                </span>
+                                                                <span className="text-xs text-slate-400">
+                                                                    {message.timestamp.toLocaleTimeString()}
+                                                                </span>
+                                                            </div>
+                                                            <div className="text-slate-300 text-sm bg-slate-900 bg-opacity-50 rounded p-2 font-mono">
+                                                                {message.payload}
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        ))}
+                                        <div ref={messagesEndRef} />
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        ReactDOM.render(<MQTTDashboard />, document.getElementById('root'));
+    </script>
+</body>
+</html>
